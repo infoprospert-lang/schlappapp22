@@ -1,0 +1,8 @@
+{
+  "name": "Remix: Auto Misselwitz TowDoc Pro",
+  "description": "Professionelle Dokumentationssoftware für Abschlepp-Einsätze mit rechtssicheren Protokollen, Fotos und Signaturen.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ]
+}
