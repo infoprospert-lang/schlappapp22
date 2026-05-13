@@ -33,7 +33,7 @@ const COMPANIES: Record<CompanyId, {
     city: 'Teutschenthal OT Holleben',
     phone: '0345 / 61 38 433',
     email: 'info@auto-misselwitz.de',
-    gf: 'Jan Holan',
+    gf: 'Jens Förster',
     logo: '/logo-misselwitz.png',
   },
   'swientek-glaeser': {

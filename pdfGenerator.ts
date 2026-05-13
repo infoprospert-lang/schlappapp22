@@ -13,7 +13,7 @@ const CO: Record<string, any> = {
   'auto-misselwitz': {
     name: 'Auto-Misselwitz GmbH',
     street: 'Mühlenstraße 18', zip: '06179', city: 'Teutschenthal OT Holleben',
-    phone: '0345 / 61 38 433', email: 'info@auto-misselwitz.de', gf: 'Jan Holan',
+    phone: '0345 / 61 38 433', email: 'info@auto-misselwitz.de', gf: 'Jens Förster',
     logo: path.resolve(__dirname, 'neuelogos', 'Logo Misselwitz.jpg'),
   },
   'swientek-glaeser': {
@@ -302,14 +302,8 @@ export async function generateHaftungsausschlussPdf(job: any): Promise<PdfResult
   doc.font('Helvetica').text(svcLabel);
   doc.moveDown(0.8);
 
-  // Feld 3 – erschwerte Bedingungen (keine App-Daten, Leerfelder aus Vorlage)
-  doc.font('Helvetica-Bold').fontSize(10).text('3.  Die Leistung ist nur unter erschwerten Bedingungen möglich, weil:', M);
-  doc.moveDown(0.3);
-  blankLines(doc, 3, M);
-  doc.moveDown(0.4);
-
-  // Feld 4 – liabilityHelp
-  doc.font('Helvetica-Bold').fontSize(10).text('4.  Hilfe kann nur wie folgt geleistet werden:', M);
+  // Feld 3 – liabilityHelp
+  doc.font('Helvetica-Bold').fontSize(10).text('3.  Hilfe kann nur wie folgt geleistet werden:', M);
   doc.moveDown(0.3);
   if (job.liabilityHelp?.trim()) {
     doc.font('Helvetica').fontSize(10).text(job.liabilityHelp, M, doc.y, { width: W });
@@ -319,34 +313,40 @@ export async function generateHaftungsausschlussPdf(job: any): Promise<PdfResult
   }
   doc.moveDown(0.4);
 
-  // Feld 5 – Kunde + Adresse + Risiken (keine App-Daten für Risiken, Leerfelder)
+  // Feld 4 – Kunde + Adresse + Risiken
   const custName = job.ownerName || '–';
   const _billingLine1 = [job.customerStreet, job.customerHouseNum].filter(Boolean).join(' ');
   const _billingLine2 = [job.customerZip, job.customerCity].filter(Boolean).join(' ');
   const _billingFull  = [_billingLine1, _billingLine2].filter(Boolean).join(', ');
   const _sceneFull    = [job.address, job.zip, job.city].filter(Boolean).join(' ');
   const custAddr = _billingFull || _sceneFull || '–';
-  doc.font('Helvetica-Bold').fontSize(10).text('5.  Frau/Herr ', M, doc.y, { continued: true });
+  doc.font('Helvetica-Bold').fontSize(10).text('4.  Frau/Herr ', M, doc.y, { continued: true });
   doc.font('Helvetica').text(custName);
   doc.font('Helvetica-Bold').fontSize(10).text('    Adresse ', M, doc.y, { continued: true });
   doc.font('Helvetica').text(custAddr);
   doc.moveDown(0.3);
   doc.font('Helvetica-Bold').fontSize(10).text('    akzeptiert den Haftungsausschluss für folgende Risiken:', M);
   doc.moveDown(0.3);
-  blankLines(doc, 2, M);
+  doc.font('Helvetica').fontSize(10).text(
+    'Mechanische Beschädigungen an Dichtungen, Lack, Rahmen, Beschlägen, Schließzylinder, Schlossanlage oder ' +
+    'angrenzenden Bauteilen, die bei einer Tür- oder Fensteröffnung trotz fachgerechter Durchführung entstehen können. ' +
+    'Die gesetzliche Haftung bei Vorsatz, grober Fahrlässigkeit sowie bei Schäden aus der Verletzung von Leben, ' +
+    'Körper oder Gesundheit bleibt unberührt.',
+    M, doc.y, { width: W },
+  );
   doc.moveDown(0.4);
 
-  // Feld 6 – Vorschäden
-  doc.font('Helvetica-Bold').fontSize(10).text('6.  Bereits vorhandene Vorschäden:', M);
+  // Feld 5 – Vorschäden
+  doc.font('Helvetica-Bold').fontSize(10).text('5.  Bereits vorhandene Vorschäden:', M);
   doc.moveDown(0.3);
   doc.font('Helvetica').fontSize(10).text(preDmg, M, doc.y, { width: W });
   doc.moveDown(0.3);
   blankLines(doc, 2, M);
   doc.moveDown(0.4);
 
-  // Feld 7 – Einsatzort + Datum
+  // Feld 6 – Einsatzort + Datum
   doc.font('Helvetica-Bold').fontSize(10)
-    .text('7.  Einsatzort: ', M, doc.y, { continued: true });
+    .text('6.  Einsatzort: ', M, doc.y, { continued: true });
   doc.font('Helvetica').text(location + '        ', { continued: true });
   doc.font('Helvetica-Bold').text('Datum: ', { continued: true });
   doc.font('Helvetica').text(date);
@@ -403,11 +403,8 @@ export async function generateHaftungsausschlussPdf(job: any): Promise<PdfResult
   const instructions = [
     'Tragen Sie Ihre Firmenbezeichnung das Aktenzeichen (soweit bekannt) sowie das KFZ-Kennzeichen ein.',
     'Kreuzen Sie die entsprechende Leistungsart an.',
-    'Notieren Sie bitte, worin die erschwerten Bedingungen bestehen und warum Sie diesen Haftungsausschluss vereinbaren möchten.\n' +
-    'Beispiel: Fahrzeug liegt so im Graben, dass keine Radklammern angebracht werden können.',
     'Tragen Sie hier ein, wie im konkreten Fall Hilfe geleistet wird.\nBeispiel: Fahrzeug muss mit Gurten geborgen werden.',
-    'Vermerken Sie hier den Namen und die Anschrift des Versicherungsnehmers/Kunden und für welche konkreten Folgeschäden Sie die Haftung ausschließen möchten.\n' +
-    'Beispiel: Schäden an den Kotflügeln, oder Schäden am Fahrzeugdach.',
+    'Vermerken Sie hier den Namen und die Anschrift des Versicherungsnehmers/Kunden. Die Risiken sind bereits vorausgefüllt.',
     'Hier können Sie evtl. schon vorhandene Vorschäden festhalten.',
     'Das Haftungsausschluss-Formular muss vor Beginn Ihrer Arbeit vom Versicherungsnehmer/Kunden und von Ihnen unterschrieben werden. ' +
     'Bitte denken Sie daran, auch Datum und Einsatzort anzugeben.',
@@ -463,6 +460,7 @@ export async function generateAuftragPdf(job: any): Promise<PdfResult> {
   // ── Auftragsinformationen ────────────────────────────────────────────────
   secHeader(doc, 'Auftragsinformationen', M);
   fl(doc, 'Auftragsnummer',  job.orderId                      || '–', M);
+  fl(doc, 'Erstellungsdatum', fmtDate(),                               M);
   fl(doc, 'Datum / Uhrzeit', fmtDateTime(job.timestamps?.accepted), M);
   fl(doc, 'Dienstleistung',  svcLabel,                                M);
   fl(doc, 'Fahrer',          job.driverName                   || '–', M);
