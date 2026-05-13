@@ -37,7 +37,7 @@ function sigPath(url: string | null | undefined): string | null {
 
 function fmtDate(iso?: string): string {
   return new Date(iso || Date.now()).toLocaleDateString('de-DE', {
-    day: '2-digit', month: '2-digit', year: 'numeric',
+    day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Berlin',
   });
 }
 
@@ -45,6 +45,7 @@ function fmtDateTime(iso?: string): string {
   if (!iso) return '–';
   return new Date(iso).toLocaleString('de-DE', {
     day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
+    timeZone: 'Europe/Berlin',
   });
 }
 
@@ -510,7 +511,7 @@ export async function generateAuftragPdf(job: any): Promise<PdfResult> {
     ['Dokumentation gestartet',  job.timestamps?.documenting],
     ['Auf dem Weg zum Zielort',  job.timestamps?.transport],
     ['Zielort erreicht',         job.timestamps?.atDest],
-  ].filter(([, v]) => !!v);
+  ].filter(([, v]) => typeof v === 'string' && v.length > 0 && !isNaN(Date.parse(v)));
 
   if (ts.length) {
     secHeader(doc, 'Zeitstempel', M);
@@ -559,9 +560,11 @@ export async function generateAuftragPdf(job: any): Promise<PdfResult> {
   } else {
     trySig(doc, job.signatures?.order, M, sigY, 55);
   }
+  doc.font('Helvetica').fontSize(8).fillColor('#000')
+    .text(fmtDate(job.timestamps?.accepted), M, sigY + 50, { width: halfW });
   hline(doc, sigY + 65, M);
   doc.font('Helvetica').fontSize(8).fillColor('#555')
-    .text('Datum/Unterschrift Kunde', M, sigY + 70, { width: halfW });
+    .text('Unterschrift Kunde', M, sigY + 70, { width: halfW });
 
   doc.end();
   return { name: 'Auftragsbestaetigung.pdf', buffer: await buf };
