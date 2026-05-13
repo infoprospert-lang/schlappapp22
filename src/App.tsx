@@ -167,12 +167,19 @@ export default function App() {
       .then(res => {
         if (res?.data && res.status !== 'Abgeschlossen (Exportiert)') {
           setJob({ ...mkState(), ...res.data, id: savedId });
+          const savedView = (localStorage.getItem('current_view') || 'detail') as View;
+          if (savedView !== 'login' && savedView !== 'admin') {
+            setView(savedView);
+          } else {
+            setView('detail');
+          }
         }
       })
       .catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => { localStorage.setItem('current_job_id', job.id); }, [job.id]);
+  useEffect(() => { if (view !== 'login' && view !== 'admin' && view !== 'dashboard') localStorage.setItem('current_view', view); }, [view]);
   useEffect(() => { localStorage.setItem('admin_pw', adminPassword); }, [adminPassword]);
 
   const sync = async (j: JobState) => {
@@ -252,6 +259,7 @@ const Login = ({ setRole, setView, setJob, adminPassword, drivers, vehicles }: a
     localStorage.setItem('selected_driver', selDriver);
     localStorage.setItem('selected_vehicle', selVehicle);
     localStorage.removeItem('current_job_id');
+    localStorage.removeItem('current_view');
     setJob(mkState());
     setRole('driver');
     setView('dashboard');
@@ -402,6 +410,7 @@ const Dashboard = ({ setView, setJob, job }: any) => {
         onClick={() => {
           if (hasActiveJob && !confirm('Aktuellen Einsatz verwerfen und neuen starten?')) return;
           localStorage.removeItem('current_job_id');
+          localStorage.removeItem('current_view');
           setJob(mkState());
           setView('basics');
         }}
@@ -787,6 +796,7 @@ const ServiceScreen = ({ setView, job, upd, uploadFile }: any) => {
         }),
       });
       localStorage.removeItem('current_job_id');
+      localStorage.removeItem('current_view');
       setAbortDone(true);
     } finally { setAbortLoading(false); }
   };
@@ -1492,6 +1502,7 @@ const Summary = ({ setView, job, upd, uploadFile }: any) => {
       const cr = await fetch(`/api/jobs/${job.id}/complete`, {method:'POST'});
       if(!cr.ok) { const e=await cr.json(); throw new Error(e.details||e.error||'Export fehlgeschlagen'); }
       localStorage.removeItem('current_job_id');
+      localStorage.removeItem('current_view');
       setDone(true);
     } catch(e:any) {
       setError('Fehler: '+e.message);
