@@ -11,6 +11,7 @@ import { fileURLToPath } from "url";
 import cookieParser from "cookie-parser";
 import { Resend } from "resend";
 import dotenv from "dotenv";
+import sharp from "sharp";
 import { generateAllPdfs, type PdfResult } from "./pdfGenerator.js";
 dotenv.config();
 
@@ -61,6 +62,11 @@ db.exec(`
     createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 `);
+
+// Migrations (idempotent)
+try { db.exec("ALTER TABLE files ADD COLUMN compressedPath TEXT"); } catch {}
+try { db.exec("ALTER TABLE files ADD COLUMN isArchived INTEGER DEFAULT 0"); } catch {}
+try { db.exec("ALTER TABLE jobs ADD COLUMN filesDeleteAt DATETIME"); } catch {}
 
 // Seed drivers and vehicles if tables are empty
 const driverCount = (db.prepare("SELECT COUNT(*) as n FROM drivers").get() as any).n;
@@ -190,6 +196,86 @@ function buildJobZip(files: any[], pdfs: PdfResult[] = []): Promise<Buffer> {
   });
 }
 
+// --- IMAGE COMPRESSION ---
+
+// Only signature fields need PNG (transparency). All photo fields → JPEG regardless of upload format.
+const SIGNATURE_FIELDS = new Set(["privacy_sig", "order_sig", "liability", "liabilityDriver"]);
+
+async function compressImageForArchive(inputPath: string, outputPath: string, keepPng: boolean): Promise<void> {
+  const pipeline = sharp(inputPath)
+    .resize(1600, 1600, { fit: "inside", withoutEnlargement: true });
+  if (keepPng) {
+    await pipeline.png({ compressionLevel: 9 }).toFile(outputPath);
+  } else {
+    await pipeline
+      .flatten({ background: { r: 255, g: 255, b: 255 } })
+      .jpeg({ quality: 40, mozjpeg: true })
+      .toFile(outputPath);
+  }
+}
+
+async function archiveJobFiles(files: any[]): Promise<void> {
+  for (const file of files) {
+    if (!file.mimeType?.startsWith("image/")) continue;
+    const originalFullPath = path.join(UPLOAD_PATH, path.basename(file.path));
+    if (!fs.existsSync(originalFullPath)) continue;
+    const keepPng = SIGNATURE_FIELDS.has(file.fieldName);
+    const ext = keepPng ? "png" : "jpg";
+    const compressedName = `arch_${path.basename(originalFullPath, path.extname(originalFullPath))}.${ext}`;
+    const compressedFullPath = path.join(UPLOAD_PATH, compressedName);
+    try {
+      await compressImageForArchive(originalFullPath, compressedFullPath, keepPng);
+      db.prepare("UPDATE files SET compressedPath = ?, isArchived = 1 WHERE id = ?")
+        .run(`/uploads/${compressedName}`, file.id);
+    } catch (e: any) {
+      console.error(`[Archive] Komprimierung fehlgeschlagen für ${file.fieldName}:`, e.message);
+      db.prepare("UPDATE files SET isArchived = 1 WHERE id = ?").run(file.id);
+    }
+  }
+}
+
+// --- CLEANUP ---
+
+function cleanupExpiredFiles() {
+  const now = new Date().toISOString();
+
+  // Delete archived files whose 30-day window has passed
+  const expired = db.prepare(`
+    SELECT f.* FROM files f
+    JOIN jobs j ON f.jobId = j.id
+    WHERE f.isArchived = 1 AND j.filesDeleteAt IS NOT NULL AND j.filesDeleteAt < ?
+  `).all(now) as any[];
+
+  for (const file of expired) {
+    const p = file.compressedPath || file.path;
+    const fp = path.join(UPLOAD_PATH, path.basename(p));
+    if (fs.existsSync(fp)) { try { fs.unlinkSync(fp); } catch {} }
+  }
+  if (expired.length > 0) {
+    db.prepare(`
+      DELETE FROM files WHERE isArchived = 1 AND jobId IN (
+        SELECT id FROM jobs WHERE filesDeleteAt IS NOT NULL AND filesDeleteAt < ?
+      )
+    `).run(now);
+    console.log(`[Cleanup] ${expired.length} abgelaufene Archivdateien gelöscht`);
+  }
+
+  // Delete original files from abandoned (never-completed) jobs older than 30 days
+  const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const abandoned = db.prepare(
+    "SELECT * FROM files WHERE isArchived = 0 AND createdAt < ?"
+  ).all(cutoff) as any[];
+
+  for (const file of abandoned) {
+    const fp = path.join(UPLOAD_PATH, path.basename(file.path));
+    if (fs.existsSync(fp)) { try { fs.unlinkSync(fp); } catch {} }
+  }
+  if (abandoned.length > 0) {
+    db.prepare("DELETE FROM files WHERE isArchived = 0 AND createdAt < ?").run(cutoff);
+    console.log(`[Cleanup] ${abandoned.length} verwaiste Upload-Dateien gelöscht`);
+  }
+}
+
 // --- DOCUMENT STATUS ---
 
 type DocStatus = { name: string; available: boolean; reason: string };
@@ -255,7 +341,7 @@ function buildEmailHtml(d: any, docStatus: DocStatus[]): string {
   const company = d.company === "swientek-glaeser" ? "Swientek & Gläser GmbH" : "Auto-Misselwitz GmbH";
   const serviceLabel = d.serviceType === "transport" ? "Transport" : d.serviceType === "pannenhilfe" ? "Pannenhilfe" : "Notöffnung";
   const fmtTs = (iso?: string) =>
-    iso ? new Date(iso).toLocaleString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "–";
+    iso ? new Date(iso).toLocaleString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "Europe/Berlin" }) : "–";
   const preDmg = Object.entries(d.preDamages || {})
     .filter(([, v]: any) => v.isDefect)
     .map(([k, v]: any) => `${k}${v.note ? ": " + v.note : ""}`)
@@ -539,38 +625,37 @@ app.post("/api/jobs/:id/complete", async (req, res) => {
       // Non-fatal: log and continue — job is still marked complete
     }
 
-    // 4. Cleanup local files after successful webhook + email
+    // 4. Compress images for archive storage, then delete originals
+    await archiveJobFiles(files);
+
     for (const file of files) {
       const fullPath = path.join(UPLOAD_PATH, path.basename(file.path));
       if (fs.existsSync(fullPath)) {
         try {
           fs.unlinkSync(fullPath);
-          console.log("Deleted local file:", fullPath);
         } catch (unlinkErr: any) {
-          console.error("Error deleting file:", unlinkErr.message);
+          console.error("Error deleting original file:", unlinkErr.message);
         }
       }
     }
-    
-    // 3. Cleanup database: Remove file records and clear photo data from job
-    db.prepare("DELETE FROM files WHERE jobId = ?").run(id);
-    
-    const currentData = jobData;
-    // Clear photos, preDamages photos, and signatures to save space and respect privacy/cleanup
+
+    // 5. Clear photo URLs from job data; file records stay in DB as archive
+    const filesDeleteAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+
     const cleanedData = {
-      ...currentData,
+      ...jobData,
       photos: {},
       preDamages: Object.fromEntries(
-        Object.entries(currentData.preDamages || {}).map(([key, val]: [string, any]) => [
-          key, 
+        Object.entries(jobData.preDamages || {}).map(([key, val]: [string, any]) => [
+          key,
           { ...val, photos: [] }
         ])
       ),
-      signatures: { driver: '', customer: '' }
+      signatures: { driver: "", customer: "" }
     };
 
-    db.prepare("UPDATE jobs SET status = 'Abgeschlossen (Exportiert)', data = ? WHERE id = ?")
-      .run(JSON.stringify(cleanedData), id);
+    db.prepare("UPDATE jobs SET status = 'Abgeschlossen (Exportiert)', data = ?, filesDeleteAt = ? WHERE id = ?")
+      .run(JSON.stringify(cleanedData), filesDeleteAt, id);
 
     console.log(`Database cleanup completed for job ${id}. File records removed and photo data cleared.`);
     res.json({ success: true });
@@ -588,9 +673,30 @@ app.post("/api/jobs/:id/complete", async (req, res) => {
   }
 });
 
+app.delete("/api/admin/jobs/:id", (req, res) => {
+  const { id } = req.params;
+  const files = db.prepare("SELECT * FROM files WHERE jobId = ?").all(id) as any[];
+
+  for (const file of files) {
+    for (const p of [file.path, file.compressedPath].filter(Boolean)) {
+      const fp = path.join(UPLOAD_PATH, path.basename(p));
+      if (fs.existsSync(fp)) { try { fs.unlinkSync(fp); } catch {} }
+    }
+  }
+
+  db.prepare("DELETE FROM files WHERE jobId = ?").run(id);
+  db.prepare("DELETE FROM jobs WHERE id = ?").run(id);
+  res.json({ success: true });
+});
+
 app.get("/api/admin/jobs", (req, res) => {
-  const jobs = db.prepare("SELECT * FROM jobs ORDER BY updatedAt DESC").all();
-  res.json(jobs.map((j: any) => ({ ...j, data: JSON.parse(j.data) })));
+  const jobs = db.prepare("SELECT * FROM jobs ORDER BY updatedAt DESC").all() as any[];
+  res.json(jobs.map((j: any) => {
+    const archivedFiles = db.prepare(
+      "SELECT id, fieldName, compressedPath, originalName FROM files WHERE jobId = ? AND isArchived = 1"
+    ).all(j.id);
+    return { ...j, data: JSON.parse(j.data), archivedFiles };
+  }));
 });
 
 app.get("/api/admin/export/:id", async (req, res) => {
@@ -605,7 +711,8 @@ app.get("/api/admin/export/:id", async (req, res) => {
   archive.append(job.data, { name: "data.json" });
 
   for (const file of files) {
-    const fullPath = path.join(UPLOAD_PATH, path.basename(file.path));
+    const filePath = (file.isArchived && file.compressedPath) ? file.compressedPath : file.path;
+    const fullPath = path.join(UPLOAD_PATH, path.basename(filePath));
     if (fs.existsSync(fullPath)) {
       archive.file(fullPath, { name: `files/${file.fieldName}-${file.originalName}` });
     }
@@ -614,6 +721,10 @@ app.get("/api/admin/export/:id", async (req, res) => {
 });
 
 async function start() {
+  // Run cleanup immediately, then every hour
+  cleanupExpiredFiles();
+  setInterval(cleanupExpiredFiles, 60 * 60 * 1000);
+
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
     app.use(vite.middlewares);

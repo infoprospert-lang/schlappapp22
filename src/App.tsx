@@ -4,7 +4,7 @@ import {
   Clock, MapPin, AlertTriangle, User, ShieldCheck,
   Edit3, FileText, Lock, EyeOff, Plus, X,
   Download, RefreshCw, Check, Hash, Gauge,
-  Building2, LogOut, Settings, Copy, Phone
+  Building2, LogOut, Settings, Copy, Phone, Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { SignaturePad } from './components/SignaturePad';
@@ -1598,6 +1598,37 @@ const Admin = ({ setView, setRole, adminPassword, setAdminPassword, drivers, veh
   const [tmpPw, setTmpPw]     = useState(adminPassword);
   const [saved, setSaved]     = useState(false);
 
+  const fileRetentionInfo = (filesDeleteAt?: string | null, status?: string, updatedAt?: string) => {
+    const daysLabel = (days: number) => `Fotos in ${days} Tag${days === 1 ? '' : 'en'} gelöscht`;
+    const fromMs = (msLeft: number) => {
+      if (msLeft <= 0) return { label: 'Dateien gelöscht', bg: 'bg-slate-100', text: 'text-slate-400', urgent: false };
+      const days = Math.ceil(msLeft / (1000 * 60 * 60 * 24));
+      if (days <= 3) return { label: daysLabel(days), bg: 'bg-red-100', text: 'text-red-600', urgent: true };
+      if (days <= 7) return { label: daysLabel(days), bg: 'bg-orange-100', text: 'text-orange-600', urgent: false };
+      return { label: daysLabel(days), bg: 'bg-blue-50', text: 'text-blue-500', urgent: false };
+    };
+
+    // Completed job with explicit expiry date
+    if (filesDeleteAt) return fromMs(new Date(filesDeleteAt).getTime() - Date.now());
+
+    // Completed job without expiry = files were deleted before this feature was added
+    if (status?.includes('Abgeschlossen')) {
+      return { label: 'Dateien gelöscht', bg: 'bg-slate-100', text: 'text-slate-400', urgent: false };
+    }
+
+    // In-progress job: estimate expiry from last update (abandoned cleanup runs at updatedAt + 30d)
+    if (updatedAt) return fromMs(new Date(updatedAt).getTime() + 30 * 24 * 60 * 60 * 1000 - Date.now());
+
+    return { label: 'Dateien 30 Tage verfügbar', bg: 'bg-slate-100', text: 'text-slate-500', urgent: false };
+  };
+
+  const deleteJob = async (id: string) => {
+    if (!confirm('Einsatz wirklich löschen? Dies kann nicht rückgängig gemacht werden.')) return;
+    await fetch(`/api/admin/jobs/${id}`, { method: 'DELETE' });
+    setJobs(prev => prev.filter(j => j.id !== id));
+    setSel(null);
+  };
+
   // Stammdaten state
   const [driverList, setDriverList]   = useState<any[]>([]);
   const [vehicleList, setVehicleList] = useState<any[]>([]);
@@ -1683,22 +1714,37 @@ const Admin = ({ setView, setRole, adminPassword, setAdminPassword, drivers, veh
 
       {tab==='jobs'&&(
         <div className="space-y-3">
+          <div className="flex items-start gap-3 bg-amber-50 border border-amber-100 rounded-2xl px-4 py-3">
+            <span className="text-amber-400 text-base mt-0.5">&#128274;</span>
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">Datenspeicherung</p>
+              <p className="text-xs font-bold text-amber-600 mt-0.5">Fotos &amp; Unterschriften werden nach Auftragsabschluss <span className="underline">30 Tage</span> komprimiert gespeichert, danach automatisch gelöscht.</p>
+            </div>
+          </div>
           {jobs.length===0&&<p className="text-center text-slate-400 font-bold text-sm py-10">Keine Einsätze vorhanden</p>}
           {jobs.map((j,idx)=>(
             <motion.div key={j.id} initial={{opacity:0,y:10}} animate={{opacity:1,y:0}} transition={{delay:idx*0.04}}
               className="bg-white p-5 rounded-[28px] shadow-sm border border-slate-100">
               <div className="flex items-start justify-between mb-3">
-                <div>
+                <div className="flex-1 min-w-0 mr-2">
                   <p className="font-black text-slate-900 text-lg tracking-tight">{j.data?.orderId||j.id}</p>
                   <div className="flex items-center gap-2 mt-1">
                     <span className="text-[9px] text-slate-400 font-black uppercase tracking-widest">{j.data?.driverName||'–'}</span>
                     <span className="w-1 h-1 bg-slate-200 rounded-full"/>
                     <span className="text-[9px] text-slate-300 font-bold">{new Date(j.updatedAt).toLocaleDateString('de-DE')}</span>
                   </div>
+                  {(()=>{ const r=fileRetentionInfo(j.filesDeleteAt, j.status, j.updatedAt); return (
+                    <span className={`inline-flex items-center gap-1 mt-2 px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wide ${r.bg} ${r.text} ${r.urgent?'animate-pulse':''}`}>
+                      <span>⏱</span>{r.label}
+                    </span>
+                  );})()}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-col items-end gap-2 flex-shrink-0">
                   <span className={`px-2 py-1 rounded-full text-[8px] font-black uppercase tracking-widest ${j.status?.includes('Abgeschlossen')?'bg-green-100 text-green-700':'bg-slate-100 text-slate-500'}`}>{j.status}</span>
-                  <a href={`/api/admin/export/${j.id}`} className="w-9 h-9 bg-slate-50 text-slate-400 rounded-xl flex items-center justify-center active:scale-90 transition-all"><Download size={16}/></a>
+                  <div className="flex gap-1">
+                    <a href={`/api/admin/export/${j.id}`} className="w-9 h-9 bg-slate-50 text-slate-400 rounded-xl flex items-center justify-center active:scale-90 transition-all" title="Export"><Download size={16}/></a>
+                    <button onClick={(e)=>{e.stopPropagation();deleteJob(j.id);}} className="w-9 h-9 bg-red-50 text-red-400 rounded-xl flex items-center justify-center active:scale-90 transition-all hover:bg-red-100 hover:text-red-600" title="Einsatz löschen"><Trash2 size={16}/></button>
+                  </div>
                 </div>
               </div>
               <button onClick={()=>setSel(sel?.id===j.id?null:j)} className="w-full text-left">

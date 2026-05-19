@@ -10,7 +10,8 @@
       "Bash(npm run *)",
       "Bash(node_modules/.bin/tsc --noEmit)",
       "Bash(python3 -c ' *)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(node -e \"require\\('sharp'\\); console.log\\('sharp OK'\\)\")"
     ]
   }
 }
